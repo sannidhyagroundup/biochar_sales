@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Biochar Scanner</title>
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --green: #2D6A4F; --green2: #40916C; --light: #D8F3DC;
+      --bg: #F4FBF6; --text: #1B2E22; --muted: #74A57F;
+      --white: #FFFFFF; --red: #E63946;
+    }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    header { background: var(--green); color: var(--white); padding: 16px 20px; text-align: center; }
+    header h1 { font-size: 1.2rem; font-weight: 700; }
+    header p  { font-size: 0.75rem; opacity: 0.8; margin-top: 2px; }
+    .screen { display: none; padding: 20px; max-width: 480px; margin: 0 auto; }
+    .screen.active { display: block; }
+    .card { background: var(--white); border-radius: 14px; padding: 18px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 14px; }
+    label { display: block; font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 5px; margin-top: 12px; }
+    label:first-child { margin-top: 0; }
+    input[type="text"], input[type="number"], select {
+      width: 100%; padding: 11px 13px; border: 1.5px solid #C8E6C9;
+      border-radius: 10px; font-size: 0.95rem; background: var(--bg);
+      color: var(--text); outline: none; transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: var(--green2); }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .btn { width: 100%; padding: 14px; border: none; border-radius: 10px; font-size: 1rem; font-weight: 700; cursor: pointer; transition: opacity 0.15s, transform 0.1s; margin-top: 10px; }
+    .btn:active { transform: scale(0.98); opacity: 0.85; }
+    .btn-primary   { background: var(--green); color: var(--white); }
+    .btn-secondary { background: var(--light); color: var(--green); }
+    .btn-danger    { background: var(--red);   color: var(--white); }
+    #video-container { position: relative; border-radius: 14px; overflow: hidden; background: #000; margin-bottom: 14px; }
+    #video { width: 100%; display: block; }
+    .scan-overlay {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 65%; aspect-ratio: 1;
+      border: 2px solid rgba(255,255,255,0.7); border-radius: 10px; pointer-events: none;
+    }
+    .invoice-bar {
+      background: var(--green); color: var(--white); border-radius: 10px;
+      padding: 10px 14px; font-size: 0.82rem; margin-bottom: 14px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .invoice-bar strong { font-size: 0.95rem; display: block; }
+    .scan-count { text-align: center; font-size: 2.2rem; font-weight: 800; color: var(--green); line-height: 1; }
+    .scan-count span { display: block; font-size: 0.72rem; font-weight: 500; color: var(--muted); margin-top: 2px; }
+    #scan-list { max-height: 200px; overflow-y: auto; }
+    .scan-item { display: flex; justify-content: space-between; align-items: center; padding: 9px 11px; border-radius: 8px; background: var(--bg); margin-bottom: 7px; animation: popIn 0.2s ease; }
+    @keyframes popIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    .scan-item .bag-id { font-weight: 700; font-size: 0.92rem; }
+    .scan-item .st     { font-size: 0.7rem; color: var(--muted); }
+    .empty-state       { text-align: center; color: var(--muted); padding: 18px 0; font-size: 0.88rem; }
+    #toast {
+      position: fixed; bottom: 24px; left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: var(--green); color: var(--white);
+      padding: 10px 22px; border-radius: 30px;
+      font-size: 0.9rem; font-weight: 600;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+      transition: transform 0.3s ease; z-index: 999; white-space: nowrap;
+    }
+    #toast.show  { transform: translateX(-50%) translateY(0); }
+    #toast.error { background: var(--red); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🌱 Biochar Bag Scanner</h1>
+  <p>Mati Carbon — Field Sales Tool</p>
+</header>
+
+<!-- SCREEN 1: Invoice Setup -->
+<div class="screen active" id="screen-setup">
+  <br>
+  <div class="card">
+    <label>Invoice Number</label>
+    <input type="text" id="inp-invoice" placeholder="e.g. INV-0042">
+
+    <label>Buyer Name</label>
+    <input type="text" id="inp-buyer" placeholder="e.g. Ramesh Kumar">
+
+    <label>Your Name (Agent)</label>
+    <input type="text" id="inp-agent" placeholder="e.g. Sunil">
+
+    <div class="row2">
+      <div>
+        <label>Product Type</label>
+        <select id="inp-product">
+          <option value="Biochar Standard">Biochar Standard</option>
+          <option value="Biochar Premium">Biochar Premium</option>
+          <option value="Biochar Blend">Biochar Blend</option>
+        </select>
+      </div>
+      <div>
+        <label>Qty per bag (kg)</label>
+        <input type="number" id="inp-qty" placeholder="e.g. 25" min="1">
+      </div>
+    </div>
+
+    <label>Location / Village</label>
+    <input type="text" id="inp-location" placeholder="e.g. Wardha, Maharashtra">
+
+    <label>Notes (optional)</label>
+    <input type="text" id="inp-notes" placeholder="Any extra info">
+
+    <button class="btn btn-primary" onclick="startInvoice()">Start Scanning →</button>
+  </div>
+</div>
+
+<!-- SCREEN 2: Scanner -->
+<div class="screen" id="screen-scan">
+  <br>
+  <div class="invoice-bar">
+    <div>
+      <span style="opacity:0.7;font-size:0.7rem;">INVOICE</span>
+      <strong id="disp-invoice"></strong>
+    </div>
+    <div style="text-align:center;">
+      <span style="opacity:0.7;font-size:0.7rem;">PRODUCT</span>
+      <strong id="disp-product"></strong>
+    </div>
+    <div style="text-align:right;">
+      <span style="opacity:0.7;font-size:0.7rem;">BUYER</span>
+      <strong id="disp-buyer"></strong>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <div id="video-container">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="scan-overlay"></div>
+    </div>
+  </div>
+
+  <div class="card" style="padding:14px;">
+    <div class="scan-count" id="scan-count">0<span>bags scanned</span></div>
+  </div>
+
+  <div class="card">
+    <label>Scanned Bags</label>
+    <div id="scan-list"><div class="empty-state">Point camera at a barcode to begin</div></div>
+  </div>
+
+  <button class="btn btn-danger" onclick="finishInvoice()">✓ Finish Invoice</button>
+  <button class="btn btn-secondary" onclick="cancelInvoice()">Cancel</button>
+  <br><br>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  // 👉 PASTE YOUR APPS SCRIPT /exec URL HERE after deploying
+  const APPS_SCRIPT_URL = "<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Biochar Scanner</title>
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --green: #2D6A4F; --green2: #40916C; --light: #D8F3DC;
+      --bg: #F4FBF6; --text: #1B2E22; --muted: #74A57F;
+      --white: #FFFFFF; --red: #E63946;
+    }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    header { background: var(--green); color: var(--white); padding: 16px 20px; text-align: center; }
+    header h1 { font-size: 1.2rem; font-weight: 700; }
+    header p  { font-size: 0.75rem; opacity: 0.8; margin-top: 2px; }
+    .screen { display: none; padding: 20px; max-width: 480px; margin: 0 auto; }
+    .screen.active { display: block; }
+    .card { background: var(--white); border-radius: 14px; padding: 18px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 14px; }
+    label { display: block; font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 5px; margin-top: 12px; }
+    label:first-child { margin-top: 0; }
+    input[type="text"], input[type="number"], select {
+      width: 100%; padding: 11px 13px; border: 1.5px solid #C8E6C9;
+      border-radius: 10px; font-size: 0.95rem; background: var(--bg);
+      color: var(--text); outline: none; transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: var(--green2); }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .btn { width: 100%; padding: 14px; border: none; border-radius: 10px; font-size: 1rem; font-weight: 700; cursor: pointer; transition: opacity 0.15s, transform 0.1s; margin-top: 10px; }
+    .btn:active { transform: scale(0.98); opacity: 0.85; }
+    .btn-primary   { background: var(--green); color: var(--white); }
+    .btn-secondary { background: var(--light); color: var(--green); }
+    .btn-danger    { background: var(--red);   color: var(--white); }
+    #video-container { position: relative; border-radius: 14px; overflow: hidden; background: #000; margin-bottom: 14px; }
+    #video { width: 100%; display: block; }
+    .scan-overlay {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 65%; aspect-ratio: 1;
+      border: 2px solid rgba(255,255,255,0.7); border-radius: 10px; pointer-events: none;
+    }
+    .invoice-bar {
+      background: var(--green); color: var(--white); border-radius: 10px;
+      padding: 10px 14px; font-size: 0.82rem; margin-bottom: 14px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .invoice-bar strong { font-size: 0.95rem; display: block; }
+    .scan-count { text-align: center; font-size: 2.2rem; font-weight: 800; color: var(--green); line-height: 1; }
+    .scan-count span { display: block; font-size: 0.72rem; font-weight: 500; color: var(--muted); margin-top: 2px; }
+    #scan-list { max-height: 200px; overflow-y: auto; }
+    .scan-item { display: flex; justify-content: space-between; align-items: center; padding: 9px 11px; border-radius: 8px; background: var(--bg); margin-bottom: 7px; animation: popIn 0.2s ease; }
+    @keyframes popIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    .scan-item .bag-id { font-weight: 700; font-size: 0.92rem; }
+    .scan-item .st     { font-size: 0.7rem; color: var(--muted); }
+    .empty-state       { text-align: center; color: var(--muted); padding: 18px 0; font-size: 0.88rem; }
+    #toast {
+      position: fixed; bottom: 24px; left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: var(--green); color: var(--white);
+      padding: 10px 22px; border-radius: 30px;
+      font-size: 0.9rem; font-weight: 600;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+      transition: transform 0.3s ease; z-index: 999; white-space: nowrap;
+    }
+    #toast.show  { transform: translateX(-50%) translateY(0); }
+    #toast.error { background: var(--red); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🌱 Biochar Bag Scanner</h1>
+  <p>Mati Carbon — Field Sales Tool</p>
+</header>
+
+<!-- SCREEN 1: Invoice Setup -->
+<div class="screen active" id="screen-setup">
+  <br>
+  <div class="card">
+    <label>Invoice Number</label>
+    <input type="text" id="inp-invoice" placeholder="e.g. INV-0042">
+
+    <label>Buyer Name</label>
+    <input type="text" id="inp-buyer" placeholder="e.g. Ramesh Kumar">
+
+    <label>Your Name (Agent)</label>
+    <input type="text" id="inp-agent" placeholder="e.g. Sunil">
+
+    <div class="row2">
+      <div>
+        <label>Product Type</label>
+        <select id="inp-product">
+          <option value="Biochar Standard">Biochar Standard</option>
+          <option value="Biochar Premium">Biochar Premium</option>
+          <option value="Biochar Blend">Biochar Blend</option>
+        </select>
+      </div>
+      <div>
+        <label>Qty per bag (kg)</label>
+        <input type="number" id="inp-qty" placeholder="e.g. 25" min="1">
+      </div>
+    </div>
+
+    <label>Location / Village</label>
+    <input type="text" id="inp-location" placeholder="e.g. Wardha, Maharashtra">
+
+    <label>Notes (optional)</label>
+    <input type="text" id="inp-notes" placeholder="Any extra info">
+
+    <button class="btn btn-primary" onclick="startInvoice()">Start Scanning →</button>
+  </div>
+</div>
+
+<!-- SCREEN 2: Scanner -->
+<div class="screen" id="screen-scan">
+  <br>
+  <div class="invoice-bar">
+    <div>
+      <span style="opacity:0.7;font-size:0.7rem;">INVOICE</span>
+      <strong id="disp-invoice"></strong>
+    </div>
+    <div style="text-align:center;">
+      <span style="opacity:0.7;font-size:0.7rem;">PRODUCT</span>
+      <strong id="disp-product"></strong>
+    </div>
+    <div style="text-align:right;">
+      <span style="opacity:0.7;font-size:0.7rem;">BUYER</span>
+      <strong id="disp-buyer"></strong>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <div id="video-container">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="scan-overlay"></div>
+    </div>
+  </div>
+
+  <div class="card" style="padding:14px;">
+    <div class="scan-count" id="scan-count">0<span>bags scanned</span></div>
+  </div>
+
+  <div class="card">
+    <label>Scanned Bags</label>
+    <div id="scan-list"><div class="empty-state">Point camera at a barcode to begin</div></div>
+  </div>
+
+  <button class="btn btn-danger" onclick="finishInvoice()">✓ Finish Invoice</button>
+  <button class="btn btn-secondary" onclick="cancelInvoice()">Cancel</button>
+  <br><br>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  // 👉 PASTE YOUR APPS SCRIPT /exec URL HERE after deploying
+  const APPS_SCRIPT_URL = "YOUR_APPS_SCRIPT_EXEC_URL_HERE";
+
+  let codeReader   = null;
+  let scannedBags  = [];
+  let lastScanned  = "";
+  let scanCooldown = false;
+  let inv, buyer, agent, product, qty, location, notes;
+
+  function startInvoice() {
+    inv      = document.getElementById("inp-invoice").value.trim();
+    buyer    = document.getElementById("inp-buyer").value.trim();
+    agent    = document.getElementById("inp-agent").value.trim();
+    product  = document.getElementById("inp-product").value;
+    qty      = document.getElementById("inp-qty").value.trim();
+    location = document.getElementById("inp-location").value.trim();
+    notes    = document.getElementById("inp-notes").value.trim();
+
+    if (!inv || !buyer || !agent) { showToast("Fill in invoice, buyer and agent", true); return; }
+
+    document.getElementById("disp-invoice").textContent = inv;
+    document.getElementById("disp-buyer").textContent   = buyer;
+    document.getElementById("disp-product").textContent = product;
+
+    showScreen("screen-scan");
+    startCamera();
+  }
+
+  function startCamera() {
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+    codeReader.listVideoInputDevices().then(devices => {
+      const back = devices.find(d => /back|rear|environment/i.test(d.label));
+      const deviceId = back ? back.deviceId : undefined;
+      codeReader.decodeFromVideoDevice(deviceId, "video", (result, err) => {
+        if (result) handleScan(result.getText());
+      });
+    }).catch(err => showToast("Camera error: " + err.message, true));
+  }
+
+  function handleScan(bagId) {
+    if (scanCooldown && bagId === lastScanned) return;
+    lastScanned  = bagId;
+    scanCooldown = true;
+    setTimeout(() => { scanCooldown = false; }, 2000);
+
+    fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({
+        invoice: inv, buyer: buyer, agent: agent, bagId: bagId,
+        productType: product, quantity: qty, location: location, notes: notes
+      })
+    })
+    .then(r => r.json())
+    .then(res => {
+      if (res.success) {
+        const time = new Date(res.timestamp).toLocaleTimeString();
+        addToList(bagId, time);
+        showToast("✓ " + bagId);
+      }
+    })
+    .catch(() => showToast("Save failed — check connection", true));
+  }
+
+  function addToList(bagId, time) {
+    scannedBags.push(bagId);
+    document.getElementById("scan-count").innerHTML = scannedBags.length + '<span>bags scanned</span>';
+    const list  = document.getElementById("scan-list");
+    const empty = list.querySelector(".empty-state");
+    if (empty) empty.remove();
+    const item  = document.createElement("div");
+    item.className = "scan-item";
+    item.innerHTML = `<span class="bag-id">${bagId}</span><span class="st">${time}</span>`;
+    list.insertBefore(item, list.firstChild);
+  }
+
+  function finishInvoice() {
+    if (scannedBags.length === 0) { showToast("No bags scanned yet", true); return; }
+    if (confirm("Finish " + inv + "? (" + scannedBags.length + " bags)")) {
+      stopCamera(); reset(); showToast("Invoice saved ✓");
+    }
+  }
+
+  function cancelInvoice() {
+    if (confirm("Cancel? Already-scanned bags are still saved.")) { stopCamera(); reset(); }
+  }
+
+  function stopCamera() { if (codeReader) { codeReader.reset(); codeReader = null; } }
+
+  function reset() {
+    scannedBags = []; lastScanned = "";
+    document.getElementById("scan-count").innerHTML = '0<span>bags scanned</span>';
+    document.getElementById("scan-list").innerHTML  = '<div class="empty-state">Point camera at a barcode to begin</div>';
+    showScreen("screen-setup");
+  }
+
+  function showScreen(id) {
+    document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+    document.getElementById(id).classList.add("active");
+  }
+
+  let toastTimer;
+  function showToast(msg, isError) {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.className   = "show" + (isError ? " error" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = ""; }, 2500);
+  }
+</script>
+</body>
+</html>";
+
+  let codeReader   = null;
+  let scannedBags  = [];
+  let lastScanned  = "";
+  let scanCooldown = false;
+  let inv, buyer, agent, product, qty, location, notes;
+
+  function startInvoice() {
+    inv      = document.getElementById("inp-invoice").value.trim();
+    buyer    = document.getElementById("inp-buyer").value.trim();
+    agent    = document.getElementById("inp-agent").value.trim();
+    product  = document.getElementById("inp-product").value;
+    qty      = document.getElementById("inp-qty").value.trim();
+    location = document.getElementById("inp-location").value.trim();
+    notes    = document.getElementById("inp-notes").value.trim();
+
+    if (!inv || !buyer || !agent) { showToast("Fill in invoice, buyer and agent", true); return; }
+
+    document.getElementById("disp-invoice").textContent = inv;
+    document.getElementById("disp-buyer").textContent   = buyer;
+    document.getElementById("disp-product").textContent = product;
+
+    showScreen("screen-scan");
+    startCamera();
+  }
+
+  function startCamera() {
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+    codeReader.listVideoInputDevices().then(devices => {
+      const back = devices.find(d => /back|rear|environment/i.test(d.label));
+      const deviceId = back ? back.deviceId : undefined;
+      codeReader.decodeFromVideoDevice(deviceId, "video", (result, err) => {
+        if (result) handleScan(result.getText());
+      });
+    }).catch(err => showToast("Camera error: " + err.message, true));
+  }
+
+  function handleScan(bagId) {
+    if (scanCooldown && bagId === lastScanned) return;
+    lastScanned  = bagId;
+    scanCooldown = true;
+    setTimeout(() => { scanCooldown = false; }, 2000);
+
+    fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({
+        invoice: inv, buyer: buyer, agent: agent, bagId: bagId,
+        productType: product, quantity: qty, location: location, notes: notes
+      })
+    })
+    .then(r => r.json())
+    .then(res => {
+      if (res.success) {
+        const time = new Date(res.timestamp).toLocaleTimeString();
+        addToList(bagId, time);
+        showToast("✓ " + bagId);
+      }
+    })
+    .catch(() => showToast("Save failed — check connection", true));
+  }
+
+  function addToList(bagId, time) {
+    scannedBags.push(bagId);
+    document.getElementById("scan-count").innerHTML = scannedBags.length + '<span>bags scanned</span>';
+    const list  = document.getElementById("scan-list");
+    const empty = list.querySelector(".empty-state");
+    if (empty) empty.remove();
+    const item  = document.createElement("div");
+    item.className = "scan-item";
+    item.innerHTML = `<span class="bag-id">${bagId}</span><span class="st">${time}</span>`;
+    list.insertBefore(item, list.firstChild);
+  }
+
+  function finishInvoice() {
+    if (scannedBags.length === 0) { showToast("No bags scanned yet", true); return; }
+    if (confirm("Finish " + inv + "? (" + scannedBags.length + " bags)")) {
+      stopCamera(); reset(); showToast("Invoice saved ✓");
+    }
+  }
+
+  function cancelInvoice() {
+    if (confirm("Cancel? Already-scanned bags are still saved.")) { stopCamera(); reset(); }
+  }
+
+  function stopCamera() { if (codeReader) { codeReader.reset(); codeReader = null; } }
+
+  function reset() {
+    scannedBags = []; lastScanned = "";
+    document.getElementById("scan-count").innerHTML = '0<span>bags scanned</span>';
+    document.getElementById("scan-list").innerHTML  = '<div class="empty-state">Point camera at a barcode to begin</div>';
+    showScreen("screen-setup");
+  }
+
+  function showScreen(id) {
+    document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+    document.getElementById(id).classList.add("active");
+  }
+
+  let toastTimer;
+  function showToast(msg, isError) {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.className   = "show" + (isError ? " error" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = ""; }, 2500);
+  }
+</script>
+</body>
+</html>
